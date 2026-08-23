@@ -4,6 +4,14 @@ OpenNomi 是一个面向 iPhone 的开源 AI 陪伴客户端。它以 NOMI 的�
 
 项目使用 SwiftUI 构建，通过小智协议连接兼容服务。
 
+## 界面预览
+
+<p align="center">
+  <img src="docs/screenshots/home.png" width="31%" alt="NOMI 主界面">
+  <img src="docs/screenshots/sleep.png" width="31%" alt="NOMI 睡眠界面">
+  <img src="docs/screenshots/settings.png" width="31%" alt="OpenNomi 设置界面">
+</p>
+
 ## 功能
 
 - 语音对话、文字对话和可选的连续对话
@@ -22,7 +30,7 @@ OpenNomi 是一个面向 iPhone 的开源 AI 陪伴客户端。它以 NOMI 的�
 ## 开始使用
 
 1. 克隆仓库并用 Xcode 打开 `OpenNomi.xcodeproj`。
-2. 在 iOS 和 Watch target 的 Signing & Capabilities 中选择自己的开发团队，并按需修改 Bundle Identifier。
+2. 在 iOS target 的 Signing & Capabilities 中选择自己的开发团队，并按需修改 Bundle Identifier。
 3. 选择 iPhone 模拟器或真机后运行 `OpenNomi` scheme。
 4. 在 App 设置中确认服务地址。默认使用官方小智服务，也可以改为兼容的小智 WebSocket 服务。
 5. 首次连接时，按照 App 内的提示前往服务端页面输入验证码完成绑定。
