@@ -1,0 +1,25 @@
+# macOS
+.DS_Store
+
+# Xcode user data and build output
+DerivedData/
+build/
+*.xcuserstate
+xcuserdata/
+*.xccheckout
+*.xcscmblueprint
+
+# Swift Package Manager
+.build/
+.swiftpm/xcode/package.xcworkspace/xcuserdata/
+
+# Local configuration and secrets
+.env
+.env.*
+*.pem
+*.p12
+*.mobileprovision
+
+# Watch app source is currently kept private
+OpenNomi Watch App Watch App/
+OpenNomi.xcodeproj/xcshareddata/xcschemes/OpenNomi Watch App Watch App.xcscheme

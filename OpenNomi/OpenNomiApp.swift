@@ -11,7 +11,12 @@ import SwiftUI
 struct OpenNomiApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            NomiExpressionView()
+                .preferredColorScheme(.dark)
+                .onAppear {
+                    WatchSyncManager.shared.activate()
+                    WatchSyncManager.shared.syncCurrentSettingsFromStorage()
+                }
         }
     }
 }
