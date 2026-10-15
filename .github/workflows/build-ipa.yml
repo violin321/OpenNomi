@@ -1,0 +1,48 @@
+name: Build unsigned IPA
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Select Xcode 26
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d /Applications/Xcode_26.6.app/Contents/Developer
+          echo 'DEVELOPER_DIR=/Applications/Xcode_26.6.app/Contents/Developer' >> "$GITHUB_ENV"
+
+      - name: Build and verify IPA
+        run: bash scripts/build-unsigned-ipa.sh
+
+      - name: Upload IPA and build receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: OpenNomi-unsigned-ipa
+          path: |
+            build/OpenNomi-unsigned.ipa
+            build/OpenNomi-unsigned.ipa.sha256
+            build/build-receipt.json
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: OpenNomi-build-log
+          path: build/xcodebuild.log
+          if-no-files-found: ignore
+          retention-days: 7
