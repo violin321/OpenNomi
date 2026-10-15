@@ -23,6 +23,9 @@ jobs:
           test -d /Applications/Xcode_26.6.app/Contents/Developer
           echo 'DEVELOPER_DIR=/Applications/Xcode_26.6.app/Contents/Developer' >> "$GITHUB_ENV"
 
+      - name: Check service routing and audio framing
+        run: bash scripts/test-connection.sh
+
       - name: Build and verify IPA
         run: bash scripts/build-unsigned-ipa.sh
 

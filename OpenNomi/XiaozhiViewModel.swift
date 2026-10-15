@@ -361,6 +361,14 @@ class XiaozhiViewModel: ObservableObject, XiaozhiWebSocketClientDelegate, Xiaozh
             currentMood = .error
             return
         }
+        let configuration: XiaozhiServerConfiguration
+        do {
+            configuration = try XiaozhiServerConfiguration.parse(trimmedURL)
+        } catch {
+            connectionPhase = .failed(error.localizedDescription)
+            currentMood = .error
+            return
+        }
         connectionGeneration += 1
         let generation = connectionGeneration
         pairingCode = nil
@@ -368,27 +376,21 @@ class XiaozhiViewModel: ObservableObject, XiaozhiWebSocketClientDelegate, Xiaozh
         connectionPhase = .connecting
         currentMood = .loading
 
-        // If it's the official server, we should bootstrap first to get a token
-        if trimmedURL.contains("tenclass.net") || trimmedURL.contains("xiaozhi.me") {
+        if let otaURL = configuration.bootstrapURL {
             connectionPhase = .bootstrapping
             Task {
-                await bootstrapAndConnect(generation: generation)
+                await bootstrapAndConnect(otaURL: otaURL, audioProtocol: configuration.audioProtocol, generation: generation)
             }
         } else {
-            performConnect(urlString: trimmedURL, token: deviceToken, deviceId: deviceId, boardUuid: boardUuid, generation: generation)
+            performConnect(urlString: configuration.url.absoluteString, token: deviceToken, deviceId: deviceId, boardUuid: boardUuid, audioProtocol: configuration.audioProtocol, generation: generation)
         }
     }
 
-    private func bootstrapAndConnect(generation: Int) async {
+    private func bootstrapAndConnect(otaURL: URL, audioProtocol: XiaozhiAudioProtocol, generation: Int) async {
         print(">>> XIAOZHI >>> Starting device bootstrap")
 
-        guard let url = URL(string: "https://api.tenclass.net/xiaozhi/ota/") else {
-            await MainActor.run {
-                self.failConnection("官方服务地址无效。", generation: generation)
-            }
-            return
-        }
-        var request = URLRequest(url: url)
+        var request = URLRequest(url: otaURL)
+        request.timeoutInterval = 20
         request.httpMethod = "POST"
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
         request.addValue(deviceId, forHTTPHeaderField: "Device-Id")
@@ -424,10 +426,22 @@ class XiaozhiViewModel: ObservableObject, XiaozhiWebSocketClientDelegate, Xiaozh
 
             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let websocket = json["websocket"] as? [String: Any],
-               let urlString = websocket["url"] as? String,
-               let token = websocket["token"] as? String {
+               let urlString = websocket["url"] as? String {
+                let token = websocket["token"] as? String ?? ""
+                let selectedProtocol: XiaozhiAudioProtocol
+                if let version = websocket["version"] as? Int {
+                    guard let supportedProtocol = XiaozhiAudioProtocol(rawValue: version) else {
+                        await MainActor.run {
+                            self.failConnection("服务器要求的语音协议版本暂不支持：\(version)。", generation: generation)
+                        }
+                        return
+                    }
+                    selectedProtocol = supportedProtocol
+                } else {
+                    selectedProtocol = audioProtocol
+                }
 
-                print(">>> XIAOZHI >>> Bootstrap SUCCESS. URL: \(urlString)")
+                print(">>> XIAOZHI >>> Bootstrap successful (audio protocol \(selectedProtocol.rawValue))")
 
                 var activationCode: String?
                 if let activation = json["activation"] as? [String: Any],
@@ -454,7 +468,7 @@ class XiaozhiViewModel: ObservableObject, XiaozhiWebSocketClientDelegate, Xiaozh
                         self.connectionPhase = .connecting
                     }
                     self.hasConnectedKey = activationCode == nil
-                    self.performConnect(urlString: urlString, token: token, deviceId: deviceId, boardUuid: boardUuid, generation: generation)
+                    self.performConnect(urlString: urlString, token: token, deviceId: deviceId, boardUuid: boardUuid, audioProtocol: selectedProtocol, generation: generation)
                 }
             } else {
                 await MainActor.run {
@@ -464,24 +478,25 @@ class XiaozhiViewModel: ObservableObject, XiaozhiWebSocketClientDelegate, Xiaozh
         } catch {
             print(">>> XIAOZHI >>> Bootstrap error: \(error)")
             await MainActor.run {
-                self.failConnection("连接官方服务失败：\(error.localizedDescription.nomiFriendlyErrorMessage)", generation: generation)
+                self.failConnection("连接 OTA 服务失败：\(error.localizedDescription.nomiFriendlyErrorMessage)", generation: generation)
             }
         }
     }
 
-    private func performConnect(urlString: String, token: String, deviceId: String, boardUuid: String, generation: Int) {
+    private func performConnect(urlString: String, token: String, deviceId: String, boardUuid: String, audioProtocol: XiaozhiAudioProtocol, generation: Int) {
         guard generation == connectionGeneration else { return }
-        guard URL(string: urlString) != nil else {
+        guard let url = URL(string: urlString), let scheme = url.scheme?.lowercased(),
+              ["ws", "wss"].contains(scheme), url.host != nil else {
             connectionPhase = .failed("WebSocket 地址无效，请在设置中检查。")
             currentMood = .error
             return
         }
 
-        print(">>> XIAOZHI >>> Connecting to: \(urlString)")
+        print(">>> XIAOZHI >>> Starting WebSocket connection")
         if pairingCode == nil {
             connectionPhase = .connecting
         }
-        webSocketClient = XiaozhiWebSocketClient(urlString: urlString, token: token, deviceId: deviceId, boardUuid: boardUuid)
+        webSocketClient = XiaozhiWebSocketClient(urlString: urlString, token: token, deviceId: deviceId, boardUuid: boardUuid, audioProtocol: audioProtocol)
         webSocketClient?.delegate = self
         webSocketClient?.connect()
     }

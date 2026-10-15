@@ -24,17 +24,20 @@ class XiaozhiWebSocketClient: NSObject, URLSessionWebSocketDelegate {
     private let token: String
     private let deviceId: String
     private let boardUuid: String
+    private let audioProtocol: XiaozhiAudioProtocol
     private var currentSessionId: String?
     private var heartbeatTimer: Timer?
     private var didNotifyDisconnect = false
+    private var connectionTimeoutTask: Task<Void, Never>?
 
     weak var delegate: XiaozhiWebSocketClientDelegate?
 
-    init(urlString: String, token: String, deviceId: String, boardUuid: String) {
+    init(urlString: String, token: String, deviceId: String, boardUuid: String, audioProtocol: XiaozhiAudioProtocol) {
         self.urlString = urlString
         self.token = token
         self.deviceId = deviceId
         self.boardUuid = boardUuid
+        self.audioProtocol = audioProtocol
         super.init()
     }
 
@@ -46,26 +49,34 @@ class XiaozhiWebSocketClient: NSObject, URLSessionWebSocketDelegate {
             let authValue = token.lowercased().hasPrefix("bearer ") ? token : "Bearer \(token)"
             request.addValue(authValue, forHTTPHeaderField: "Authorization")
         }
-        request.addValue("3", forHTTPHeaderField: "Protocol-Version")
+        request.addValue(String(audioProtocol.rawValue), forHTTPHeaderField: "Protocol-Version")
         request.addValue(deviceId, forHTTPHeaderField: "Device-Id")
         request.addValue(boardUuid, forHTTPHeaderField: "Client-Id")
         request.addValue("ESP32-S3-BOX-3/2.2.4", forHTTPHeaderField: "User-Agent")
         request.httpMethod = "GET"
         request.cachePolicy = .reloadIgnoringLocalCacheData
 
-        print("WebSocket Connecting to \(urlString)...")
+        print("WebSocket connecting (audio protocol \(audioProtocol.rawValue))")
         let config = URLSessionConfiguration.ephemeral
         config.waitsForConnectivity = true
         session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
         webSocketTask = session?.webSocketTask(with: request)
         didNotifyDisconnect = false
         webSocketTask?.resume()
+        connectionTimeoutTask = Task { [weak self] in
+            do { try await Task.sleep(nanoseconds: 20_000_000_000) } catch { return }
+            guard let self, !self.isConnected, !Task.isCancelled else { return }
+            self.notifyDisconnected(error: XiaozhiServerConfiguration.connectionError(
+                "连接超时，请检查服务器地址、Token 和手机的 Tailscale 连接。"))
+        }
 
         // Heartbeat is started in didOpenWithProtocol
         receiveMessage()
     }
 
     func disconnect() {
+        connectionTimeoutTask?.cancel()
+        connectionTimeoutTask = nil
         stopHeartbeat()
         isConnected = false
         webSocketTask?.cancel(with: .goingAway, reason: nil)
@@ -81,7 +92,7 @@ class XiaozhiWebSocketClient: NSObject, URLSessionWebSocketDelegate {
         let jsonString = """
         {
             "type": "hello",
-            "version": 3,
+            "version": \(audioProtocol.rawValue),
             "transport": "websocket",
             "features": {
                 "mcp": true
@@ -117,27 +128,15 @@ class XiaozhiWebSocketClient: NSObject, URLSessionWebSocketDelegate {
         let sid = currentSessionId ?? ""
         // Mimic a wake word detection but with full text payload
         // Official format: {"session_id":"...", "type":"listen", "state":"detect", "text":"..."}
-        let jsonString = "{\"session_id\":\"\(sid)\",\"type\":\"listen\",\"state\":\"detect\",\"text\":\"\(text)\"}"
-        sendMessage(string: jsonString)
+        let message = ["session_id": sid, "type": "listen", "state": "detect", "text": text]
+        if let data = try? JSONSerialization.data(withJSONObject: message),
+           let jsonString = String(data: data, encoding: .utf8) {
+            sendMessage(string: jsonString)
+        }
     }
 
     func sendAudioData(_ data: Data) {
-        // Official BinaryProtocol3:
-        // uint8_t type (0 for audio)
-        // uint8_t reserved (0)
-        // uint16_t payload_size (Big-endian)
-        // uint8_t payload[]
-
-        let payloadSize = UInt16(data.count)
-        var header = Data()
-        header.append(0) // type
-        header.append(0) // reserved
-        header.append(UInt8((payloadSize >> 8) & 0xFF)) // size high
-        header.append(UInt8(payloadSize & 0xFF))        // size low
-
-        var fullPacket = header
-        fullPacket.append(data)
-
+        guard let fullPacket = audioProtocol.encodeAudio(data) else { return }
         let message = URLSessionWebSocketTask.Message.data(fullPacket)
         webSocketTask?.send(message) { error in
             if let error = error {
@@ -204,22 +203,8 @@ class XiaozhiWebSocketClient: NSObject, URLSessionWebSocketDelegate {
                             print("WebSocket received non-JSON string: \(text)")
                         }
                     case .data(let data):
-                        // Check for BinaryProtocol3 header (4 bytes)
-                        if data.count > 4 {
-                            let pktType = data[0]
-                            // payloadSize is part of the header but unused for now
-                            _ = (UInt16(data[2]) << 8) | UInt16(data[3])
-
-                            if pktType == 0 { // Audio
-                                let audioData = data.advanced(by: 4)
-                                // Only call delegate if length matches or we want to ignore framing error for now
-                                self.delegate?.webSocketClient(self, didReceiveAudioData: audioData)
-                            } else {
-                                print(">>> XIAOZHI >>> Received non-audio binary packet (type: \(pktType))")
-                            }
-                        } else {
-                            // Version 1 (no header) or unexpected data
-                            self.delegate?.webSocketClient(self, didReceiveAudioData: data)
+                        if let audio = self.audioProtocol.decodeAudio(data) {
+                            self.delegate?.webSocketClient(self, didReceiveAudioData: audio)
                         }
                     @unknown default:
                         break
@@ -239,10 +224,11 @@ class XiaozhiWebSocketClient: NSObject, URLSessionWebSocketDelegate {
 
         switch typeString {
         case "hello":
-            if let sid = json["session_id"] as? String {
-                currentSessionId = sid
-                print(">>> XIAOZHI >>> Captured Session ID: \(sid)")
-            }
+            guard let sid = json["session_id"] as? String, !sid.isEmpty, !isConnected else { return }
+            currentSessionId = sid
+            isConnected = true
+            connectionTimeoutTask?.cancel()
+            connectionTimeoutTask = nil
             if let audioParams = json["audio_params"] as? [String: Any] {
                 print(">>> XIAOZHI >>> Server Audio Params: \(audioParams)")
             }
@@ -269,7 +255,7 @@ class XiaozhiWebSocketClient: NSObject, URLSessionWebSocketDelegate {
             }
         case "error":
             if let msg = json["message"] as? String {
-                print(">>> XIAOZHI >>> Server ERROR: \(msg)")
+                notifyDisconnected(error: XiaozhiServerConfiguration.connectionError(msg))
             }
         default:
             print(">>> XIAOZHI >>> Unknown JSON: \(typeString)")
@@ -340,12 +326,11 @@ class XiaozhiWebSocketClient: NSObject, URLSessionWebSocketDelegate {
         print(">>> XIAOZHI >>> Connection OPEN (Protocol: \(protocolStr))")
         Task { @MainActor [weak self] in
             guard let self = self else { return }
-            self.isConnected = true
             self.startHeartbeat()
             // Wait a small amount to ensure stream is ready
             try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !self.didNotifyDisconnect else { return }
             self.sendHello()
-            self.delegate?.webSocketClientDidConnect(self)
         }
     }
 
@@ -370,8 +355,12 @@ class XiaozhiWebSocketClient: NSObject, URLSessionWebSocketDelegate {
     private func notifyDisconnected(error: Error?) {
         guard !didNotifyDisconnect else { return }
         didNotifyDisconnect = true
+        connectionTimeoutTask?.cancel()
+        connectionTimeoutTask = nil
         isConnected = false
         stopHeartbeat()
+        webSocketTask?.cancel(with: .goingAway, reason: nil)
+        session?.invalidateAndCancel()
         webSocketTask = nil
         session = nil
         delegate?.webSocketClientDidDisconnect(self, error: error)

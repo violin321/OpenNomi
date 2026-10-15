@@ -219,7 +219,7 @@ struct SettingsView: View {
         Form {
             Section("连接到哪里") {
                 LabeledContent {
-                    TextField("wss://...", text: $webSocketURL, axis: .vertical)
+                    TextField("https://…/xiaozhi/ota/ 或 wss://…", text: $webSocketURL, axis: .vertical)
                         .autocapitalization(.none)
                         .disableAutocorrection(true)
                         .keyboardType(.URL)
@@ -227,6 +227,10 @@ struct SettingsView: View {
                 } label: {
                     Label("服务地址", systemImage: "network")
                 }
+
+                Text("自建后台请填写完整 OTA 地址，NOMI 会自动获取 Token 和语音连接地址。也支持直接填写 WebSocket 地址，并在下方填写对应设备的 Token。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
 
                 LabeledContent {
                     SecureField("可留空", text: $deviceToken)
