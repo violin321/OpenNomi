@@ -50,7 +50,7 @@ enum XiaozhiConnectionPhase: Equatable {
         case .connecting:
             return "马上就能听见你了。"
         case .pairing:
-            return "它会念出验证码，也会显示在字幕里。打开绑定页面填好后，点“我已完成”。"
+            return "验证码显示在字幕里。打开绑定页面填好后，点“我已完成”。"
         case .connected:
             return nil
         case .failed(let message):
@@ -459,6 +459,7 @@ class XiaozhiViewModel: ObservableObject, XiaozhiWebSocketClientDelegate, Xiaozh
                         self.pairingCode = activationCode
                         self.connectionPhase = .pairing
                         self.currentMood = .lookLeft
+                        self.aiResponseText = "验证码 \(activationCode)。请在绑定页面填写，然后点“我已完成”。"
                         if self.pendingPairingConfirmationCode == activationCode {
                             self.aiResponseText = "我还没找到你的绑定。请确认服务端已输入验证码 \(activationCode)，然后再点“我已完成”。"
                         }
@@ -468,6 +469,12 @@ class XiaozhiViewModel: ObservableObject, XiaozhiWebSocketClientDelegate, Xiaozh
                         self.connectionPhase = .connecting
                     }
                     self.hasConnectedKey = activationCode == nil
+                    // The community server does not acknowledge hello until
+                    // binding completes. Keep the pairing UI available instead
+                    // of starting a socket that will time out while users bind.
+                    if activationCode != nil && selectedProtocol == .rawOpus {
+                        return
+                    }
                     self.performConnect(urlString: urlString, token: token, deviceId: deviceId, boardUuid: boardUuid, audioProtocol: selectedProtocol, generation: generation)
                 }
             } else {
